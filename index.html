@@ -1,200 +1,58 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Filtered CT Dems DTCs (Selected Towns)</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; line-height: 1.35; }
-    header { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 18px; }
-    input { padding: 10px 12px; min-width: 280px; border: 1px solid #ccc; border-radius: 10px; }
-    button { padding: 10px 12px; border: 1px solid #ccc; border-radius: 10px; background: #f7f7f7; cursor: pointer; }
-    button:hover { background: #eee; }
-    .meta { color: #555; font-size: 14px; }
-    .error { background: #fff3f3; border: 1px solid #f2b8b8; padding: 12px; border-radius: 12px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 14px; }
-    .card { border: 1px solid #ddd; border-radius: 14px; padding: 14px; background: white; }
-    .card h3 { margin: 0 0 10px 0; font-size: 18px; }
-    .card a { word-break: break-word; }
-    .src { margin-top: 18px; font-size: 13px; color: #666; }
-    .pill { display:inline-block; padding: 3px 8px; border: 1px solid #ddd; border-radius: 999px; font-size: 12px; color: #555; }
-  </style>
+<meta charset="utf-8">
+<title>CT Dems DTCs (Filtered)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font-family: system-ui, sans-serif; margin: 24px; }
+h1 { margin-bottom: 10px; }
+input { padding: 8px; width: 280px; margin-right: 10px; }
+.card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+.hidden { display: none; }
+</style>
 </head>
 <body>
-  <h1>CT Dems DTCs (Filtered)</h1>
 
-  <header>
-    <input id="search" placeholder="Search within included towns…" />
-    <button id="refresh">Refresh from source</button>
-    <span class="pill" id="countPill">0 towns</span>
-  </header>
+<h1>CT Dems DTCs (Filtered)</h1>
 
-  <div class="meta">
-    This page loads the official DTC list and displays only your included towns.
-  </div>
+<input id="search" placeholder="Search towns…" />
 
-  <div id="status" style="margin-top:12px;"></div>
-  <div id="grid" class="grid"></div>
-
-  <div class="src">
-    Source page: <a href="https://ctdems.org/dtcs/" target="_blank" rel="noreferrer">https://ctdems.org/dtcs/</a>
-  </div>
+<div id="list"></div>
 
 <script>
-/**
- * IMPORTANT:
- *  - Set PROXY_ENDPOINT to your deployed proxy (Cloudflare Worker URL).
- *  - The proxy must return the HTML of https://ctdems.org/dtcs/ with CORS headers.
- */
-const PROXY_ENDPOINT = "https://dtc-proxy.brewedcoffeebean.workers.dev/?url=";
+const towns = [
+"Andover","Ashford","Bolton","Bozrah","Brooklyn","Canterbury","Chaplin","Chester","Clinton",
+"Colchester","Columbia","Coventry","Deep River","East Haddam","East Hampton","East Lyme",
+"Eastford","Ellington","Enfield","Essex","Franklin","Griswold","Groton","Haddam","Hampton",
+"Hebron","Killingly","Killingworth","Lebanon","Ledyard","Lisbon","Lyme","Madison","Mansfield",
+"Marlborough","Montville","New London","North Stonington","Norwich","Old Lyme","Old Saybrook",
+"Plainfield","Pomfret","Preston","Putnam","Salem","Scotland","Somers","Sprague","Stafford",
+"Sterling","Stonington","Suffield","Thompson","Tolland","Union","Vernon","Voluntown",
+"Waterford","Westbrook","Willington","Windham","Woodstock"
+];
 
-const SOURCE_URL = "https://ctdems.org/dtcs/";
+const list = document.getElementById("list");
 
-// Your INCLUDED towns (normalized):
-const INCLUDED_TOWNS = [
-  "Andover","Ashford","Bolton","Bozrah","Brooklyn","Canterbury","Chaplin","Chester","Clinton","Colchester",
-  "Columbia","Coventry","Deep River","East Haddam","East Hampton","East Lyme","Eastford","Ellington","Enfield",
-  "Essex","Franklin","Griswold","Groton","Haddam","Hampton","Hebron","Killingly","Killingworth","Lebanon","Ledyard",
-  "Lisbon","Lyme","Madison","Mansfield","Marlborough","Montville","New London","North Stonington","Norwich","Old Lyme",
-  "Old Saybrook","Plainfield","Pomfret","Preston","Putnam","Salem","Scotland","Somers","Sprague","Stafford","Sterling",
-  "Stonington","Suffield","Thompson","Tolland","Union","Vernon","Voluntown","Waterford","Westbrook","Willington",
-  "Windham","Woodstock"
-].map(t => t.trim());
-
-const includedSet = new Set(INCLUDED_TOWNS.map(normTown));
-
-const statusEl = document.getElementById("status");
-const gridEl = document.getElementById("grid");
-const searchEl = document.getElementById("search");
-const refreshBtn = document.getElementById("refresh");
-const countPill = document.getElementById("countPill");
-
-let allCards = []; // { town, el }
-
-function normTown(s) {
-  return (s || "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/[’']/g, "'")
-    .trim();
-}
-
-function setStatus(html, isError=false) {
-  statusEl.innerHTML = isError ? `<div class="error">${html}</div>` : html;
-}
-
-function absolutizeLinks(root) {
-  root.querySelectorAll("a[href]").forEach(a => {
-    const href = a.getAttribute("href");
-    if (!href) return;
-    // make relative links absolute
-    if (href.startsWith("/")) a.href = "https://ctdems.org" + href;
-    if (href.startsWith("//")) a.href = "https:" + href;
-    a.target = "_blank";
-    a.rel = "noreferrer";
-  });
-}
-
-async function loadAndRender() {
-  gridEl.innerHTML = "";
-  allCards = [];
-  setStatus("Loading…");
-
-  const url = PROXY_ENDPOINT + encodeURIComponent(SOURCE_URL);
-
-  let html;
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error(`Proxy returned ${res.status}`);
-    html = await res.text();
-  } catch (err) {
-    setStatus(
-      `Could not load the source page through the proxy.<br><br>
-       <b>Fix:</b> confirm PROXY_ENDPOINT in index.html points to your deployed Worker, and that it returns HTML with CORS headers.<br>
-       <div style="margin-top:8px;"><code>${String(err)}</code></div>`,
-      true
-    );
-    return;
-  }
-
-  // Parse the source HTML
-  const doc = new DOMParser().parseFromString(html, "text/html");
-
-  // The page is structured as repeating town sections with a "### Town" heading.
-  // In the HTML, these appear as headings with links, then some social links, then a separator. :contentReference[oaicite:1]{index=1}
-  const headings = Array.from(doc.querySelectorAll("h3"));
-
-  const matches = [];
-
-  for (const h3 of headings) {
-    const townName = (h3.textContent || "").trim();
-    if (!townName) continue;
-
-    if (!includedSet.has(normTown(townName))) continue;
-
-    // Build a card from the h3 and its following sibling elements until the next HR
-    const card = document.createElement("div");
-    card.className = "card";
-
-    const h3Clone = h3.cloneNode(true);
-    card.appendChild(h3Clone);
-
-    // collect sibling elements until HR
-    let n = h3.nextElementSibling;
-    while (n && n.tagName && n.tagName.toLowerCase() !== "hr") {
-      // skip empty nodes
-      const text = (n.textContent || "").trim();
-      if (text || n.querySelector("a")) {
-        card.appendChild(n.cloneNode(true));
-      }
-      n = n.nextElementSibling;
-    }
-
-    absolutizeLinks(card);
-
-    matches.push({ town: townName, el: card });
-  }
-
-  // Render
-  if (!matches.length) {
-    setStatus(
-      `Loaded source successfully, but none of your included towns were found.<br><br>
-       <b>Tip:</b> make sure town spellings match the site’s headings (ex: "Marlborough" not "Malbourough", "Plainfield" not "Planifield").`,
-      true
-    );
-    return;
-  }
-
-  setStatus("");
-  matches
-    .sort((a,b) => a.town.localeCompare(b.town))
-    .forEach(m => {
-      gridEl.appendChild(m.el);
-      allCards.push(m);
+function render(filter="") {
+  list.innerHTML = "";
+  towns
+    .filter(t => t.toLowerCase().includes(filter.toLowerCase()))
+    .sort()
+    .forEach(town => {
+      const div = document.createElement("div");
+      div.className = "card";
+      div.textContent = town;
+      list.appendChild(div);
     });
-
-  countPill.textContent = `${allCards.length} towns`;
-  applySearch();
 }
 
-function applySearch() {
-  const q = normTown(searchEl.value);
-  let shown = 0;
+document.getElementById("search").addEventListener("input", e => {
+  render(e.target.value);
+});
 
-  allCards.forEach(({ town, el }) => {
-    const ok = !q || normTown(town).includes(q) || normTown(el.textContent).includes(q);
-    el.style.display = ok ? "" : "none";
-    if (ok) shown++;
-  });
-
-  countPill.textContent = `${shown} / ${allCards.length} towns`;
-}
-
-searchEl.addEventListener("input", applySearch);
-refreshBtn.addEventListener("click", loadAndRender);
-
-// initial load
-loadAndRender();
+render();
 </script>
+
 </body>
 </html>
